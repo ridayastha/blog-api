@@ -63,14 +63,21 @@ TEMPLATES = [
 WSGI_APPLICATION = 'blog.wsgi.application'
 
 # Database Configuration
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.postgresql',
+#         'NAME': env('DATABASE_NAME', default='blog_db'),
+#         'USER': env('DATABASE_USER', default='postgres'),
+#         'PASSWORD': env('DATABASE_PASSWORD', default=''),
+#         'HOST': env('DATABASE_HOST', default='localhost'),
+#         'PORT': env('DATABASE_PORT', default='5432'),
+#     }
+# }
+
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': env('DATABASE_NAME', default='blog_db'),
-        'USER': env('DATABASE_USER', default='postgres'),
-        'PASSWORD': env('DATABASE_PASSWORD', default=''),
-        'HOST': env('DATABASE_HOST', default='localhost'),
-        'PORT': env('DATABASE_PORT', default='5432'),
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',
     }
 }
 
