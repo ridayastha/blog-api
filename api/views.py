@@ -1,5 +1,6 @@
 """Views for blog API."""
 from rest_framework import viewsets, status, filters
+from rest_framework.authtoken.models import Token
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, IsAuthenticatedOrReadOnly, AllowAny
@@ -7,6 +8,9 @@ from rest_framework.views import APIView
 from django.contrib.auth.models import User
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
+from rest_framework.authentication import TokenAuthentication
 
 from .models import Post, Category, Comment, Tag, UserProfile
 from .serializers import (
@@ -35,10 +39,11 @@ class UserRegistrationView(APIView):
             )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-
+@method_decorator(csrf_exempt, name='dispatch')
 class UserLoginView(APIView):
     """User login endpoint (basic implementation)."""
     permission_classes = [AllowAny]
+    authentication_classes = []
 
     def post(self, request):
         username = request.data.get('username')
@@ -53,7 +58,9 @@ class UserLoginView(APIView):
         try:
             user = User.objects.get(username=username)
             if user.check_password(password):
+                token, created = Token.objects.get_or_create(user=user)
                 return Response({
+                    'token': token.key,
                     'id': user.id,
                     'username': user.username,
                     'email': user.email,

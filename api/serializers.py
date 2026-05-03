@@ -78,11 +78,15 @@ class CommentSerializer(serializers.ModelSerializer):
 class PostListSerializer(serializers.ModelSerializer):
     author = UserSerializer(read_only=True)
     category = CategorySerializer(read_only=True)
+    category_id = serializers.PrimaryKeyRelatedField(
+        queryset=Category.objects.all(), source='category', write_only=True, required=False, allow_null=True
+    )
     comments_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Post
-        fields = ['id', 'title', 'slug', 'excerpt', 'author', 'category', 'featured_image', 'views', 'is_featured', 'comments_count', 'created_at', 'published_at', 'status']
+        fields = ['id', 'title', 'slug', 'excerpt', 'content', 'author', 'category', 'category_id', 'featured_image', 'views', 'is_featured', 'comments_count', 'created_at', 'published_at', 'status']
+        read_only_fields = ['id', 'slug', 'views', 'created_at', 'published_at']
 
     def get_comments_count(self, obj):
         return obj.comments.filter(status='approved').count()
@@ -103,3 +107,6 @@ class PostDetailSerializer(serializers.ModelSerializer):
             'comments_count', 'created_at', 'updated_at', 'published_at'
         ]
         read_only_fields = ['id', 'views', 'created_at', 'updated_at', 'published_at']
+
+    def get_comments_count(self, obj):
+        return obj.comments.filter(status='approved').count()
