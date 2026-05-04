@@ -1,18 +1,15 @@
-"""Views for blog API."""
+from django.db.models import Count, Q
+from django.contrib.auth.models import User
+from django.utils import timezone
+from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import viewsets, status, filters
-from rest_framework.authtoken.models import Token
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, IsAuthenticatedOrReadOnly, AllowAny
 from rest_framework.views import APIView
-from django.contrib.auth.models import User
-from django.utils import timezone
-from django_filters.rest_framework import DjangoFilterBackend
-from django.utils.decorators import method_decorator
-from django.views.decorators.csrf import csrf_exempt
-from rest_framework.authentication import TokenAuthentication
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
-from .models import Post, Category, Comment, Tag, UserProfile
+from .models import Post, Category, Comment, Tag
 from .serializers import (
     PostListSerializer,
     PostDetailSerializer,
@@ -20,7 +17,6 @@ from .serializers import (
     CommentSerializer,
     UserSerializer,
     UserRegistrationSerializer,
-    TagSerializer,
 )
 from .permissions import IsAuthorOrReadOnly
 
@@ -39,53 +35,25 @@ class UserRegistrationView(APIView):
             )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-@method_decorator(csrf_exempt, name='dispatch')
-class UserLoginView(APIView):
-    """User login endpoint (basic implementation)."""
-    permission_classes = [AllowAny]
-    authentication_classes = []
 
-    def post(self, request):
-        username = request.data.get('username')
-        password = request.data.get('password')
-        
-        if not username or not password:
-            return Response(
-                {'error': 'Username and password required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        try:
-            user = User.objects.get(username=username)
-            if user.check_password(password):
-                token, created = Token.objects.get_or_create(user=user)
-                return Response({
-                    'token': token.key,
-                    'id': user.id,
-                    'username': user.username,
-                    'email': user.email,
-                    'message': 'Login successful'
-                }, status=status.HTTP_200_OK)
-        except User.DoesNotExist:
-            pass
-        
-        return Response(
-            {'error': 'Invalid credentials'},
-            status=status.HTTP_401_UNAUTHORIZED
-        )
+class MeView(APIView):
+    """Returns data for the currently logged-in user."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        serializer = UserSerializer(request.user)
+        return Response(serializer.data)
 
 
 class UserViewSet(viewsets.ReadOnlyModelViewSet):
-    """ViewSet for users."""
     queryset = User.objects.all()
     serializer_class = UserSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
     filter_backends = [filters.SearchFilter]
-    search_fields = ['username', 'email', 'first_name', 'last_name']
+    search_fields = ['username', 'email']
 
     @action(detail=True, methods=['get'])
     def posts(self, request, pk=None):
-        """Get user's published posts."""
         user = self.get_object()
         posts = user.posts.filter(status='published')
         serializer = PostListSerializer(posts, many=True)
@@ -93,32 +61,35 @@ class UserViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class CategoryViewSet(viewsets.ModelViewSet):
-    """ViewSet for categories."""
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
     permission_classes = [IsAuthenticatedOrReadOnly]
     filter_backends = [filters.SearchFilter]
-    search_fields = ['name', 'description']
+    search_fields = ['name']
     lookup_field = 'slug'
 
     @action(detail=True, methods=['get'])
     def posts(self, request, slug=None):
-        """Get posts in this category."""
         category = self.get_object()
-        posts = category.posts.filter(status='published')
-        serializer = PostListSerializer(posts, many=True)
+        # Filter posts by category and ensure they are published (for non-staff)
+        posts = Post.objects.filter(category=category)
+
+        if not request.user.is_staff:
+            posts = posts.filter(status='published')
+
+        # Use the PostListSerializer for a cleaner list view
+        serializer = PostListSerializer(posts, many=True, context={'request': request})
         return Response(serializer.data)
 
 
 class PostViewSet(viewsets.ModelViewSet):
-    """ViewSet for blog posts."""
-    queryset = Post.objects.all()
+    # Optimized with select_related for foreign keys
+    queryset = Post.objects.all().select_related('author', 'category').prefetch_related('tags')
+    parser_classes = (MultiPartParser, FormParser, JSONParser)
     permission_classes = [IsAuthenticatedOrReadOnly]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['status', 'category', 'author', 'is_featured']
-    search_fields = ['title', 'content', 'excerpt']
-    ordering_fields = ['created_at', 'published_at', 'views']
-    ordering = ['-published_at']
+    search_fields = ['title', 'content']
     lookup_field = 'slug'
 
     def get_serializer_class(self):
@@ -126,45 +97,41 @@ class PostViewSet(viewsets.ModelViewSet):
             return PostDetailSerializer
         return PostListSerializer
 
+    def get_queryset(self):
+        # 1. Base Queryset
+        queryset = super().get_queryset()
+
+        # 2. Security: Hide drafts from public (Non-staff see only published)
+        if not self.request.user.is_staff:
+            queryset = queryset.filter(status='published')
+
+        # 3. Optimization: Database-level count for comments
+        return queryset.annotate(
+            approved_comments_count=Count('comments', filter=Q(comments__status='approved'))
+        )
+
     def perform_create(self, serializer):
         serializer.save(author=self.request.user)
 
-    def perform_update(self, serializer):
-        serializer.save()
-
     @action(detail=True, methods=['post'])
     def publish(self, request, slug=None):
-        """Publish a draft post."""
         post = self.get_object()
         if post.status == 'draft':
             post.status = 'published'
             post.published_at = timezone.now()
             post.save()
-            return Response({'message': 'Post published successfully'})
-        return Response(
-            {'error': 'Only draft posts can be published'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+            return Response({'message': 'Post published'})
+        return Response({'error': 'Only drafts can be published'}, status=400)
 
     @action(detail=True, methods=['post'])
     def increment_views(self, request, slug=None):
-        """Increment post views."""
         post = self.get_object()
         post.views += 1
-        post.save()
+        post.save(update_fields=['views'])
         return Response({'views': post.views})
-
-    @action(detail=True, methods=['get'])
-    def comments(self, request, slug=None):
-        """Get approved comments for post."""
-        post = self.get_object()
-        comments = post.comments.filter(status='approved', parent_comment__isnull=True)
-        serializer = CommentSerializer(comments, many=True)
-        return Response(serializer.data)
 
 
 class CommentViewSet(viewsets.ModelViewSet):
-    """ViewSet for comments."""
     queryset = Comment.objects.all()
     serializer_class = CommentSerializer
     permission_classes = [IsAuthenticatedOrReadOnly]
@@ -176,13 +143,10 @@ class CommentViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def approve(self, request, pk=None):
-        """Approve a comment (author only)."""
         comment = self.get_object()
+        # Only the blog post author can approve comments on their post
         if comment.post.author == request.user:
             comment.status = 'approved'
             comment.save()
             return Response({'message': 'Comment approved'})
-        return Response(
-            {'error': 'Permission denied'},
-            status=status.HTTP_403_FORBIDDEN
-        )
+        return Response({'error': 'Permission denied'}, status=403)

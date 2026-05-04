@@ -2,6 +2,10 @@
 from django.db import models
 from django.contrib.auth.models import User
 from django.utils.text import slugify
+import math
+from django.utils import timezone
+from django.utils.html import strip_tags
+import math
 from django.core.validators import MinValueValidator, MaxValueValidator
 
 
@@ -57,11 +61,37 @@ class Post(models.Model):
         ]
 
     def __str__(self):
-        return self.title
+        return (self.title)
+
+    @property
+    def reading_time(self):
+        """Calculates estimated reading time with tag stripping."""
+        # Strip HTML tags so you don't count <div>, <p>, etc. as words
+        clean_text = strip_tags(self.content)
+        word_count = len(clean_text.split())
+
+        # Using 200 WPM as the standard
+        # Even 1 word results in 1, but we can differentiate in the UI
+        minutes = math.ceil(word_count / 200)
+
+        return minutes
 
     def save(self, *args, **kwargs):
+        # 1. Improved Automatic Slugging (Handles Collisions)
         if not self.slug:
-            self.slug = slugify(self.title)
+            base_slug = slugify(self.title)
+            unique_slug = base_slug
+            counter = 1
+            # Check if this slug is already taken
+            while Post.objects.filter(slug=unique_slug).exists():
+                unique_slug = f"{base_slug}-{counter}"
+                counter += 1
+            self.slug = unique_slug
+
+        # 2. Automatic Timestamping for Publication
+        if self.status == 'published' and not self.published_at:
+            self.published_at = timezone.now()
+
         super().save(*args, **kwargs)
 
 

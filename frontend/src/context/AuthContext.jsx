@@ -8,48 +8,59 @@ export function AuthProvider({ children }) {
   const [token, setToken] = useState(localStorage.getItem('token'));
   const [loading, setLoading] = useState(true);
 
+  // Verify user on load or when token changes
   useEffect(() => {
-    if (token) {
-      api.defaults.headers.common['Authorization'] = `Token ${token}`;
-      // Try to get current user info
-      api.get('users/')
-        .then(res => {
-          const users = res.data.results || res.data;
-          // We stored user id on login
-          const userId = localStorage.getItem('userId');
-          const currentUser = userId ? users.find(u => u.id === parseInt(userId)) : users[0];
-          setUser(currentUser || null);
-        })
-        .catch(() => {
+    const verifyUser = async () => {
+      if (token) {
+        try {
+          // Use the specific 'me' endpoint you created in Django
+          const res = await api.get('auth/me/');
+          setUser(res.data);
+        } catch (err) {
+          console.error("Token invalid or expired");
           logout();
-        })
-        .finally(() => setLoading(false));
-    } else {
+        }
+      }
       setLoading(false);
-    }
+    };
+
+    verifyUser();
   }, [token]);
 
   const login = async (username, password) => {
+    // SimpleJWT endpoint
     const res = await api.post('auth/login/', { username, password });
-    if (res.data && res.data.token) {
-      localStorage.setItem('token', res.data.token);
-      localStorage.setItem('userId', res.data.id);
-      setToken(res.data.token);
-      setUser({ id: res.data.id, username: res.data.username, email: res.data.email });
+
+    // SimpleJWT returns 'access' and 'refresh'
+    if (res.data && res.data.access) {
+      const accessToken = res.data.access;
+
+      localStorage.setItem('token', accessToken);
+      // Optional: store refresh token if you implement refresh logic later
+      localStorage.setItem('refreshToken', res.data.refresh);
+
+      setToken(accessToken);
+
+      // Immediately fetch user details after login
+      const userRes = await api.get('auth/me/', {
+          headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      setUser(userRes.data);
+
       return res.data;
     }
-    throw new Error('No token received');
+    throw new Error('Invalid login response');
   };
 
   const register = async (data) => {
+    // Matches your path('api/v1/auth/register/')
     const res = await api.post('auth/register/', data);
     return res.data;
   };
 
   const logout = () => {
     localStorage.removeItem('token');
-    localStorage.removeItem('userId');
-    delete api.defaults.headers.common['Authorization'];
+    localStorage.removeItem('refreshToken');
     setToken(null);
     setUser(null);
   };
